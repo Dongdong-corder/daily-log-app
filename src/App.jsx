@@ -1,12 +1,20 @@
 import { useState, useMemo, useEffect } from 'react';
 import html2canvas from 'html2canvas';
-import { Plus, Trash2, User, LogOut, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Trash2, User, LogOut, Calendar, ChevronLeft, ChevronRight, Cloud, CloudOff, Download, Upload } from 'lucide-react';
+
+// ⚠️ AWS API 엔드포인트 (여러분의 URL로 변경하세요!)
+const AWS_API_URL = 'https://9z2081l90b.execute-api.us-east-1.amazonaws.com/prod';
 
 export default function App() {
   /* ---------------- 닉네임 시스템 ---------------- */
   const [currentUser, setCurrentUser] = useState(null);
   const [showNicknameModal, setShowNicknameModal] = useState(false);
   const [nicknameInput, setNicknameInput] = useState('');
+
+  /* ---------------- 클라우드 동기화 상태 ---------------- */
+  const [cloudStatus, setCloudStatus] = useState('idle'); // idle, syncing, success, error
+  const [lastCloudSync, setLastCloudSync] = useState(null);
+  const [cloudMessage, setCloudMessage] = useState('');
 
   /* ---------------- 색상 테마 ---------------- */
   const pastelColors = [
@@ -35,7 +43,6 @@ export default function App() {
 
   /* ---------------- 날짜별 공부 기록 (히스토리) ---------------- */
   const [studyHistory, setStudyHistory] = useState({});
-  // 형식: { "2024-03-01": { hours: 2, minutes: 30, tasks: [...] }, ... }
 
   /* ---------------- 할 일 ---------------- */
   const [tasks, setTasks] = useState([
@@ -47,13 +54,125 @@ export default function App() {
 
   /* ---------------- DAY 번호 자동 계산 ---------------- */
   const dayNumber = useMemo(() => {
-    // 공부 시간이 0보다 큰 날짜만 카운트
     const studyDays = Object.entries(studyHistory).filter(([date, data]) => {
       const totalMinutes = (data.hours || 0) * 60 + (data.minutes || 0);
-      return totalMinutes > 0 && date <= selectedDate; // 선택된 날짜까지만 카운트
+      return totalMinutes > 0 && date <= selectedDate;
     });
     return studyDays.length;
   }, [studyHistory, selectedDate]);
+
+  /* ---------------- AWS 클라우드 함수들 ---------------- */
+  
+  // 클라우드에 저장
+  const saveToCloud = async () => {
+    if (!currentUser) return;
+    
+    setCloudStatus('syncing');
+    setCloudMessage('클라우드에 백업 중...');
+    
+    try {
+      const response = await fetch(`${AWS_API_URL}/save`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          nickname: currentUser,
+          data: {
+            themeColor,
+            studyHistory,
+          },
+        }),
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        setCloudStatus('success');
+        setLastCloudSync(new Date().toISOString());
+        setCloudMessage('클라우드 백업 완료! ✅');
+        
+        // 로컬에도 마지막 동기화 시간 저장
+        localStorage.setItem(`dailylog_last_sync_${currentUser}`, new Date().toISOString());
+        
+        setTimeout(() => {
+          setCloudStatus('idle');
+          setCloudMessage('');
+        }, 3000);
+      } else {
+        throw new Error(result.message || '백업 실패');
+      }
+    } catch (error) {
+      console.error('Cloud save error:', error);
+      setCloudStatus('error');
+      setCloudMessage('백업 실패: ' + error.message);
+      
+      setTimeout(() => {
+        setCloudStatus('idle');
+        setCloudMessage('');
+      }, 5000);
+    }
+  };
+  
+  // 클라우드에서 불러오기
+  const loadFromCloud = async () => {
+    if (!currentUser) return;
+    
+    const confirmLoad = confirm(
+      '클라우드에서 데이터를 불러오면 현재 로컬 데이터가 덮어씌워집니다.\n계속하시겠습니까?'
+    );
+    
+    if (!confirmLoad) return;
+    
+    setCloudStatus('syncing');
+    setCloudMessage('클라우드에서 불러오는 중...');
+    
+    try {
+      const response = await fetch(
+        `${AWS_API_URL}/load?nickname=${encodeURIComponent(currentUser)}`
+      );
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        // 데이터 복원
+        setThemeColor(result.data.themeColor || pastelColors[0]);
+        setStudyHistory(result.data.studyHistory || {});
+        
+        setCloudStatus('success');
+        setLastCloudSync(result.lastUpdated);
+        setCloudMessage('클라우드에서 복구 완료! ✅');
+        
+        // 로컬 스토리지에도 저장
+        localStorage.setItem(`dailylog_data_${currentUser}`, JSON.stringify(result.data));
+        localStorage.setItem(`dailylog_last_sync_${currentUser}`, result.lastUpdated);
+        
+        setTimeout(() => {
+          setCloudStatus('idle');
+          setCloudMessage('');
+        }, 3000);
+      } else if (result.isNewUser) {
+        setCloudStatus('error');
+        setCloudMessage('클라우드에 저장된 데이터가 없습니다.');
+        
+        setTimeout(() => {
+          setCloudStatus('idle');
+          setCloudMessage('');
+        }, 3000);
+      } else {
+        throw new Error(result.message || '불러오기 실패');
+      }
+    } catch (error) {
+      console.error('Cloud load error:', error);
+      setCloudStatus('error');
+      setCloudMessage('불러오기 실패: ' + error.message);
+      
+      setTimeout(() => {
+        setCloudStatus('idle');
+        setCloudMessage('');
+      }, 5000);
+    }
+  };
 
   /* ---------------- 초기 로드: 닉네임 확인 ---------------- */
   useEffect(() => {
@@ -61,21 +180,27 @@ export default function App() {
     if (savedUser) {
       setCurrentUser(savedUser);
       loadUserData(savedUser);
+      
+      // 마지막 클라우드 동기화 시간 불러오기
+      const lastSync = localStorage.getItem(`dailylog_last_sync_${savedUser}`);
+      if (lastSync) {
+        setLastCloudSync(lastSync);
+      }
     } else {
       setShowNicknameModal(true);
     }
   }, []);
 
-  /* ---------------- 사용자 데이터 저장 ---------------- */
+  /* ---------------- 사용자 데이터 저장 (로컬) ---------------- */
   const saveUserData = (username) => {
     const userData = {
       themeColor,
-      studyHistory, // 전체 히스토리 저장
+      studyHistory,
     };
     localStorage.setItem(`dailylog_data_${username}`, JSON.stringify(userData));
   };
 
-  /* ---------------- 사용자 데이터 로드 ---------------- */
+  /* ---------------- 사용자 데이터 로드 (로컬) ---------------- */
   const loadUserData = (username) => {
     const saved = localStorage.getItem(`dailylog_data_${username}`);
     if (saved) {
@@ -93,18 +218,17 @@ export default function App() {
       setMinutes(dayData.minutes || 0);
       setTasks(dayData.tasks || [{ id: 1, text: 'React 복습', checked: false }]);
     } else {
-      // 새로운 날짜면 초기화
       setHours(0);
       setMinutes(0);
       setTasks([{ id: 1, text: 'React 복습', checked: false }]);
     }
-  }, [selectedDate]); // ✅ studyHistory 의존성 제거 (무한 루프 방지)
+  }, [selectedDate]);
 
-  /* ---------------- 데이터 변경 시 자동 저장 (디바운스) ---------------- */
+  /* ---------------- 데이터 변경 시 자동 저장 (로컬 + 클라우드) ---------------- */
   useEffect(() => {
     if (!currentUser) return;
 
-    // ✅ 500ms 후에 저장 (디바운스 - 사용자가 입력을 멈춘 후 저장)
+    // 로컬 저장 (디바운스)
     const timer = setTimeout(() => {
       setStudyHistory(prev => ({
         ...prev,
@@ -126,6 +250,18 @@ export default function App() {
     }
   }, [studyHistory, themeColor, currentUser]);
 
+  /* ---------------- 자동 클라우드 백업 (5분마다) ---------------- */
+  useEffect(() => {
+    if (!currentUser) return;
+    
+    // 5분마다 자동 백업
+    const autoBackup = setInterval(() => {
+      saveToCloud();
+    }, 5 * 60 * 1000); // 5분
+    
+    return () => clearInterval(autoBackup);
+  }, [currentUser, themeColor, studyHistory]);
+
   /* ---------------- 닉네임 등록 ---------------- */
   const handleNicknameSubmit = () => {
     const trimmed = nicknameInput.trim();
@@ -138,6 +274,14 @@ export default function App() {
     loadUserData(trimmed);
     setShowNicknameModal(false);
     setNicknameInput('');
+    
+    // 클라우드에서 데이터 불러오기 시도
+    setTimeout(() => {
+      const tryLoad = confirm('클라우드에 저장된 데이터를 불러오시겠습니까?\n(없으면 새로 시작합니다)');
+      if (tryLoad) {
+        loadFromCloud();
+      }
+    }, 500);
   };
 
   /* ---------------- 닉네임 변경 (로그아웃) ---------------- */
@@ -201,8 +345,8 @@ export default function App() {
         minutes: data.minutes || 0,
         totalMinutes: (data.hours || 0) * 60 + (data.minutes || 0),
       }))
-      .filter((record) => record.totalMinutes > 0) // 0분인 날은 제외
-      .sort((a, b) => b.date.localeCompare(a.date)); // 최신순
+      .filter((record) => record.totalMinutes > 0)
+      .sort((a, b) => b.date.localeCompare(a.date));
   }, [studyHistory]);
 
   /* ---------------- 다운로드 ---------------- */
@@ -218,6 +362,20 @@ export default function App() {
     link.download = `DAY${dayNumber}_${currentUser}_${selectedDate}.png`;
     link.href = canvas.toDataURL('image/png');
     link.click();
+  };
+
+  /* ---------------- 마지막 동기화 시간 포맷 ---------------- */
+  const formatSyncTime = (isoString) => {
+    if (!isoString) return '없음';
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    
+    if (diffMins < 1) return '방금 전';
+    if (diffMins < 60) return `${diffMins}분 전`;
+    if (diffMins < 1440) return `${Math.floor(diffMins / 60)}시간 전`;
+    return `${Math.floor(diffMins / 1440)}일 전`;
   };
 
   /* ---------------- 닉네임 입력 모달 ---------------- */
@@ -265,6 +423,17 @@ export default function App() {
         <div className="flex items-center gap-2">
           <User className="w-5 h-5 text-purple-500" />
           <span className="font-semibold text-gray-700">{currentUser}</span>
+          
+          {/* 클라우드 상태 아이콘 */}
+          {cloudStatus === 'syncing' && (
+            <Cloud className="w-4 h-4 text-blue-500 animate-pulse" />
+          )}
+          {cloudStatus === 'success' && (
+            <Cloud className="w-4 h-4 text-green-500" />
+          )}
+          {cloudStatus === 'error' && (
+            <CloudOff className="w-4 h-4 text-red-500" />
+          )}
         </div>
         <button
           onClick={handleLogout}
@@ -275,9 +444,49 @@ export default function App() {
         </button>
       </div>
 
+      {/* ================= 클라우드 메시지 ================= */}
+      {cloudMessage && (
+        <div className={`w-full max-w-md px-4 py-2 rounded-lg text-sm text-center ${
+          cloudStatus === 'success' ? 'bg-green-100 text-green-700' :
+          cloudStatus === 'error' ? 'bg-red-100 text-red-700' :
+          'bg-blue-100 text-blue-700'
+        }`}>
+          {cloudMessage}
+        </div>
+      )}
+
       {/* ================= 입력 패널 ================= */}
       <div className="w-full max-w-md bg-white p-6 rounded-2xl shadow-lg">
-        <h1 className="text-xl font-bold mb-4">📘 DAILY LOG 설정</h1>
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-xl font-bold">📘 DAILY LOG 설정</h1>
+          
+          {/* 클라우드 동기화 버튼들 */}
+          <div className="flex gap-2">
+            <button
+              onClick={saveToCloud}
+              disabled={cloudStatus === 'syncing'}
+              className="p-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="클라우드에 백업"
+            >
+              <Upload size={16} />
+            </button>
+            <button
+              onClick={loadFromCloud}
+              disabled={cloudStatus === 'syncing'}
+              className="p-2 bg-green-500 hover:bg-green-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="클라우드에서 복구"
+            >
+              <Download size={16} />
+            </button>
+          </div>
+        </div>
+
+        {/* 마지막 동기화 시간 */}
+        {lastCloudSync && (
+          <div className="text-xs text-gray-500 mb-4 text-center">
+            ☁️ 마지막 클라우드 동기화: {formatSyncTime(lastCloudSync)}
+          </div>
+        )}
 
         {/* DAY 번호 (자동 계산 - 읽기 전용) */}
         <label className="block text-sm font-semibold mb-2">DAY 번호 (자동)</label>
