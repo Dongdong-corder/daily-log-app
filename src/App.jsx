@@ -98,28 +98,28 @@ export default function App() {
       setMinutes(0);
       setTasks([{ id: 1, text: 'React 복습', checked: false }]);
     }
-  }, [selectedDate, studyHistory]);
+  }, [selectedDate]); // ✅ studyHistory 의존성 제거 (무한 루프 방지)
 
-  /* ---------------- 현재 날짜 데이터 저장 ---------------- */
-  const saveCurrentDateData = () => {
-    const newHistory = {
-      ...studyHistory,
-      [selectedDate]: {
-        hours: Number(hours),
-        minutes: Number(minutes),
-        tasks: tasks,
-      },
-    };
-    setStudyHistory(newHistory);
-  };
-
-  /* ---------------- 데이터 변경 시 자동 저장 ---------------- */
+  /* ---------------- 데이터 변경 시 자동 저장 (디바운스) ---------------- */
   useEffect(() => {
-    if (currentUser) {
-      saveCurrentDateData();
-    }
-  }, [hours, minutes, tasks]);
+    if (!currentUser) return;
 
+    // ✅ 500ms 후에 저장 (디바운스 - 사용자가 입력을 멈춘 후 저장)
+    const timer = setTimeout(() => {
+      setStudyHistory(prev => ({
+        ...prev,
+        [selectedDate]: {
+          hours: Number(hours),
+          minutes: Number(minutes),
+          tasks: tasks,
+        },
+      }));
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [hours, minutes, tasks, selectedDate, currentUser]);
+
+  /* ---------------- localStorage에 저장 ---------------- */
   useEffect(() => {
     if (currentUser) {
       saveUserData(currentUser);
