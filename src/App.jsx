@@ -1,15 +1,12 @@
 import { useState, useMemo, useEffect } from 'react';
 import html2canvas from 'html2canvas';
-import { Plus, Trash2, User, LogOut } from 'lucide-react';
+import { Plus, Trash2, User, LogOut, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 
 export default function App() {
   /* ---------------- 닉네임 시스템 ---------------- */
   const [currentUser, setCurrentUser] = useState(null);
   const [showNicknameModal, setShowNicknameModal] = useState(false);
   const [nicknameInput, setNicknameInput] = useState('');
-
-  /* ---------------- DAY 번호 ---------------- */
-  const [dayNumber, setDayNumber] = useState(1);
 
   /* ---------------- 색상 테마 ---------------- */
   const pastelColors = [
@@ -21,19 +18,42 @@ export default function App() {
   ];
   const [themeColor, setThemeColor] = useState(pastelColors[0]);
 
-  /* ---------------- 날짜 ---------------- */
-  const [customDate, setCustomDate] = useState(
-    new Date().toISOString().split('T')[0]
-  );
+  /* ---------------- 날짜 (자동으로 오늘 날짜) ---------------- */
+  const getTodayDate = () => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
 
-  /* ---------------- 공부 시간 ---------------- */
-  const [hours, setHours] = useState(2);
-  const [minutes, setMinutes] = useState(30);
+  const [selectedDate, setSelectedDate] = useState(getTodayDate());
+
+  /* ---------------- 공부 시간 (선택된 날짜) ---------------- */
+  const [hours, setHours] = useState(0);
+  const [minutes, setMinutes] = useState(0);
+
+  /* ---------------- 날짜별 공부 기록 (히스토리) ---------------- */
+  const [studyHistory, setStudyHistory] = useState({});
+  // 형식: { "2024-03-01": { hours: 2, minutes: 30, tasks: [...] }, ... }
 
   /* ---------------- 할 일 ---------------- */
   const [tasks, setTasks] = useState([
     { id: 1, text: 'React 복습', checked: false },
   ]);
+
+  /* ---------------- 히스토리 뷰 토글 ---------------- */
+  const [showHistory, setShowHistory] = useState(false);
+
+  /* ---------------- DAY 번호 자동 계산 ---------------- */
+  const dayNumber = useMemo(() => {
+    // 공부 시간이 0보다 큰 날짜만 카운트
+    const studyDays = Object.entries(studyHistory).filter(([date, data]) => {
+      const totalMinutes = (data.hours || 0) * 60 + (data.minutes || 0);
+      return totalMinutes > 0 && date <= selectedDate; // 선택된 날짜까지만 카운트
+    });
+    return studyDays.length;
+  }, [studyHistory, selectedDate]);
 
   /* ---------------- 초기 로드: 닉네임 확인 ---------------- */
   useEffect(() => {
@@ -49,12 +69,8 @@ export default function App() {
   /* ---------------- 사용자 데이터 저장 ---------------- */
   const saveUserData = (username) => {
     const userData = {
-      dayNumber,
       themeColor,
-      customDate,
-      hours,
-      minutes,
-      tasks,
+      studyHistory, // 전체 히스토리 저장
     };
     localStorage.setItem(`dailylog_data_${username}`, JSON.stringify(userData));
   };
@@ -64,21 +80,51 @@ export default function App() {
     const saved = localStorage.getItem(`dailylog_data_${username}`);
     if (saved) {
       const data = JSON.parse(saved);
-      setDayNumber(data.dayNumber || 1);
       setThemeColor(data.themeColor || pastelColors[0]);
-      setCustomDate(data.customDate || new Date().toISOString().split('T')[0]);
-      setHours(data.hours || 2);
-      setMinutes(data.minutes || 30);
-      setTasks(data.tasks || [{ id: 1, text: 'React 복습', checked: false }]);
+      setStudyHistory(data.studyHistory || {});
     }
+  };
+
+  /* ---------------- 선택된 날짜의 데이터 로드 ---------------- */
+  useEffect(() => {
+    if (studyHistory[selectedDate]) {
+      const dayData = studyHistory[selectedDate];
+      setHours(dayData.hours || 0);
+      setMinutes(dayData.minutes || 0);
+      setTasks(dayData.tasks || [{ id: 1, text: 'React 복습', checked: false }]);
+    } else {
+      // 새로운 날짜면 초기화
+      setHours(0);
+      setMinutes(0);
+      setTasks([{ id: 1, text: 'React 복습', checked: false }]);
+    }
+  }, [selectedDate, studyHistory]);
+
+  /* ---------------- 현재 날짜 데이터 저장 ---------------- */
+  const saveCurrentDateData = () => {
+    const newHistory = {
+      ...studyHistory,
+      [selectedDate]: {
+        hours: Number(hours),
+        minutes: Number(minutes),
+        tasks: tasks,
+      },
+    };
+    setStudyHistory(newHistory);
   };
 
   /* ---------------- 데이터 변경 시 자동 저장 ---------------- */
   useEffect(() => {
     if (currentUser) {
+      saveCurrentDateData();
+    }
+  }, [hours, minutes, tasks]);
+
+  useEffect(() => {
+    if (currentUser) {
       saveUserData(currentUser);
     }
-  }, [dayNumber, themeColor, customDate, hours, minutes, tasks, currentUser]);
+  }, [studyHistory, themeColor, currentUser]);
 
   /* ---------------- 닉네임 등록 ---------------- */
   const handleNicknameSubmit = () => {
@@ -101,6 +147,19 @@ export default function App() {
     }
   };
 
+  /* ---------------- 날짜 이동 ---------------- */
+  const changeDate = (days) => {
+    const current = new Date(selectedDate);
+    current.setDate(current.getDate() + days);
+    const newDate = current.toISOString().split('T')[0];
+    setSelectedDate(newDate);
+  };
+
+  /* ---------------- 오늘로 돌아가기 ---------------- */
+  const goToToday = () => {
+    setSelectedDate(getTodayDate());
+  };
+
   /* ---------------- 할 일 관리 ---------------- */
   const addTask = () => {
     setTasks([...tasks, { id: Date.now(), text: '', checked: false }]);
@@ -120,14 +179,31 @@ export default function App() {
     );
   };
 
-  /* ---------------- 누적 공부시간 계산 ---------------- */
-  const totalMinutes = useMemo(() => {
-    return Number(hours) * 60 + Number(minutes);
-  }, [hours, minutes]);
+  /* ---------------- 총 누적 시간 계산 ---------------- */
+  const totalAccumulatedMinutes = useMemo(() => {
+    let total = 0;
+    Object.values(studyHistory).forEach((day) => {
+      total += (day.hours || 0) * 60 + (day.minutes || 0);
+    });
+    return total;
+  }, [studyHistory]);
 
-  const totalHoursFormatted = `${Math.floor(totalMinutes / 60)}H ${
-    totalMinutes % 60
+  const totalHoursFormatted = `${Math.floor(totalAccumulatedMinutes / 60)}H ${
+    totalAccumulatedMinutes % 60
   }M`;
+
+  /* ---------------- 히스토리 목록 생성 ---------------- */
+  const historyList = useMemo(() => {
+    return Object.entries(studyHistory)
+      .map(([date, data]) => ({
+        date,
+        hours: data.hours || 0,
+        minutes: data.minutes || 0,
+        totalMinutes: (data.hours || 0) * 60 + (data.minutes || 0),
+      }))
+      .filter((record) => record.totalMinutes > 0) // 0분인 날은 제외
+      .sort((a, b) => b.date.localeCompare(a.date)); // 최신순
+  }, [studyHistory]);
 
   /* ---------------- 다운로드 ---------------- */
   const downloadSlide = async () => {
@@ -139,7 +215,7 @@ export default function App() {
     });
 
     const link = document.createElement('a');
-    link.download = `DAY${dayNumber}_${currentUser}_1080.png`;
+    link.download = `DAY${dayNumber}_${currentUser}_${selectedDate}.png`;
     link.href = canvas.toDataURL('image/png');
     link.click();
   };
@@ -203,15 +279,14 @@ export default function App() {
       <div className="w-full max-w-md bg-white p-6 rounded-2xl shadow-lg">
         <h1 className="text-xl font-bold mb-4">📘 DAILY LOG 설정</h1>
 
-        {/* DAY 번호 */}
-        <label className="block text-sm font-semibold mb-2">DAY 번호</label>
-        <input
-          type="number"
-          min="1"
-          value={dayNumber}
-          onChange={(e) => setDayNumber(e.target.value)}
-          className="w-full border p-2 rounded mb-4"
-        />
+        {/* DAY 번호 (자동 계산 - 읽기 전용) */}
+        <label className="block text-sm font-semibold mb-2">DAY 번호 (자동)</label>
+        <div className="w-full border bg-gray-50 p-2 rounded mb-4 text-center font-bold text-lg text-purple-600">
+          DAY {dayNumber}
+        </div>
+        <p className="text-xs text-gray-500 mb-4 -mt-2">
+          💡 공부 기록이 있는 날짜를 자동으로 카운트합니다
+        </p>
 
         {/* 색상 선택 */}
         <label className="block text-sm font-semibold mb-2">테마 색상</label>
@@ -229,18 +304,41 @@ export default function App() {
           ))}
         </div>
 
-        {/* 날짜 선택 */}
+        {/* 날짜 선택 네비게이션 */}
         <label className="block text-sm font-semibold mb-2">날짜 선택</label>
-        <input
-          type="date"
-          value={customDate}
-          onChange={(e) => setCustomDate(e.target.value)}
-          className="w-full border p-2 rounded mb-4"
-        />
+        <div className="flex items-center gap-2 mb-4">
+          <button
+            onClick={() => changeDate(-1)}
+            className="p-2 border rounded hover:bg-gray-100"
+          >
+            <ChevronLeft size={20} />
+          </button>
+          
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)}
+            className="flex-1 border p-2 rounded text-center font-semibold"
+          />
+          
+          <button
+            onClick={() => changeDate(1)}
+            className="p-2 border rounded hover:bg-gray-100"
+          >
+            <ChevronRight size={20} />
+          </button>
+        </div>
 
-        {/* 공부 시간 */}
+        <button
+          onClick={goToToday}
+          className="w-full bg-blue-100 text-blue-700 py-2 rounded-lg mb-4 font-semibold text-sm hover:bg-blue-200"
+        >
+          📅 오늘로 돌아가기
+        </button>
+
+        {/* 공부 시간 입력 */}
         <label className="block text-sm font-semibold mb-2">
-          공부 시간 설정
+          {selectedDate === getTodayDate() ? '오늘' : selectedDate} 공부 시간
         </label>
         <div className="flex gap-3 mb-4">
           <div className="flex-1">
@@ -267,6 +365,65 @@ export default function App() {
             <div className="text-center text-xs mt-1">분 (M)</div>
           </div>
         </div>
+
+        {/* 총 누적 시간 표시 */}
+        <div className="bg-purple-50 border-2 border-purple-200 rounded-lg p-4 mb-4">
+          <div className="text-center">
+            <div className="text-xs text-purple-600 font-semibold mb-1">
+              📊 전체 누적 공부 시간
+            </div>
+            <div className="text-3xl font-bold text-purple-700 mb-2">
+              {totalHoursFormatted}
+            </div>
+            <div className="text-xs text-gray-600">
+              총 {historyList.length}일 기록됨
+            </div>
+          </div>
+        </div>
+
+        {/* 히스토리 토글 버튼 */}
+        <button
+          onClick={() => setShowHistory(!showHistory)}
+          className="w-full bg-gray-100 text-gray-700 py-2 rounded-lg mb-4 font-semibold text-sm hover:bg-gray-200 flex items-center justify-center gap-2"
+        >
+          <Calendar size={16} />
+          {showHistory ? '히스토리 숨기기' : '히스토리 보기'}
+        </button>
+
+        {/* 히스토리 목록 */}
+        {showHistory && (
+          <div className="mb-4 max-h-64 overflow-y-auto border rounded-lg">
+            {historyList.length === 0 ? (
+              <div className="p-4 text-center text-gray-500 text-sm">
+                아직 기록된 데이터가 없습니다
+              </div>
+            ) : (
+              historyList.map((record) => (
+                <button
+                  key={record.date}
+                  onClick={() => setSelectedDate(record.date)}
+                  className={`w-full p-3 border-b hover:bg-gray-50 text-left flex justify-between items-center ${
+                    selectedDate === record.date ? 'bg-purple-50' : ''
+                  }`}
+                >
+                  <div>
+                    <div className="font-semibold text-sm">
+                      {record.date}
+                      {record.date === getTodayDate() && (
+                        <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+                          오늘
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-purple-600 font-bold">
+                    {record.hours}H {record.minutes}M
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        )}
 
         {/* 할 일 */}
         <label className="block text-sm font-semibold mb-2">할 일 목록</label>
@@ -325,7 +482,7 @@ export default function App() {
           DAY {dayNumber} - DAILY LOG
         </h2>
 
-        <div className="text-center font-semibold mb-4">📅 {customDate}</div>
+        <div className="text-center font-semibold mb-4">📅 {selectedDate}</div>
 
         <div className="flex-1 space-y-3">
           {tasks.map((task) => (
